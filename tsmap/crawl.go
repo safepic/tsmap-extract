@@ -213,6 +213,14 @@ func processScript(scriptURL *url.URL, rootURL *url.URL, outBase string, beautif
 	}
 	jsText := string(jsBytes)
 
+	// Detect chunk names built via 'return "..."+var+"."+{...}[var]+".chunk.js"'
+	chunkURLs := findChunkURLsReturnPattern(jsText, scriptURL, rootURL)
+	for _, cu := range chunkURLs {
+		results <- fmt.Sprintf("Discovered chunk via return(): %s", cu.String())
+		// Traiter le chunk comme un script normal (sequentiel pour ne pas exploser la concurrence)
+		processScript(cu, rootURL, outBase, beautify, eol, userAgent, saveJS, saveMap, results)
+	}
+
 	// optional save js
 	if saveJS {
 		hostPath := hostPathForURL(rootURL, scriptURL)
@@ -363,6 +371,114 @@ func processMapBytes(mapData []byte, outBase, hostPath string, beautify bool, eo
 		written++
 	}
 	return written, nil
+}
+
+var reReturn = regexp.MustCompile(`return *["']([^"']*)["'] *\+ *(\w) *\+["'][^"']*["']\+({[^{]*})\[(\w)\]\+["']\.chunk\.js["']`)
+var reIntJson = regexp.MustCompile(`([{,]\s*)(-?\d+)(\s*:)`)
+
+// Ajoute des guillemets autour des clés numériques non citées: {20:"x"} -> {"20":"x"}
+func quoteNumericObjectKeys(s string) string {
+	// Match: soit '{' soit ',' + espaces + chiffres (optionnellement négatifs) + espaces + ':'
+	// Exemple: "{20:" ou ", 172 :" -> on insère des guillemets autour du 20/172
+	return reIntJson.ReplaceAllString(s, `$1"$2"$3`)
+}
+
+func parseWeirdJSON(input string) (map[int]string, error) {
+	norm := quoteNumericObjectKeys(input)
+	var out map[int]string
+	if err := json.Unmarshal([]byte(norm), &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// findChunkURLsReturnPattern looks for patterns like:
+// return "static/js/"+e+"."+{20:"493d026d",21:"5f0ee513",...}[e]+".chunk.js"
+// It extracts the prefix, the index variable name, the {id:"hash"} object, and builds full chunk URLs.
+func findChunkURLsReturnPattern(jsText string, scriptURL *url.URL, rootURL *url.URL) []*url.URL {
+	if !strings.Contains(jsText, ".chunk.js") {
+		return nil
+	}
+	// 1) Isoler les expressions renvoyees qui contiennent .chunk.js
+	matches := reReturn.FindAllStringSubmatchIndex(jsText, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	var out []*url.URL
+
+	for _, mi := range matches {
+		if len(mi) != 10 {
+			continue
+		}
+		if mi[2] < 0 || mi[3] < 0 || mi[4] < 0 || mi[5] < 0 || mi[6] < 0 || mi[7] < 0 || mi[8] < 0 || mi[9] < 0 {
+			continue
+		}
+		if mi[3] < mi[2] || mi[4] < mi[3] || mi[5] < mi[4] || mi[6] < mi[5] || mi[7] < mi[6] || mi[8] < mi[7] || mi[9] < mi[8] {
+			continue
+		}
+		staticPrefix := jsText[mi[2]:mi[3]]
+		varName := jsText[mi[4]:mi[5]]
+		json := jsText[mi[6]:mi[7]]
+		varName2 := jsText[mi[8]:mi[9]]
+
+		if varName != varName2 {
+			continue
+		}
+
+		kv, err := parseWeirdJSON(json)
+		if err != nil {
+			continue
+		}
+
+		// 6) Construire les URLs: <prefix><id>.<hash>.chunk.js
+		for k, v := range kv {
+			name := fmt.Sprintf("%s%d.%s.chunk.js", staticPrefix, k, v)
+
+			u, err := url.Parse(name)
+			if err != nil {
+				continue
+			}
+
+			resolved := rootURL.ResolveReference(u)
+
+			// Si schema/host absents, batir depuis le dossier du script
+			if resolved.Scheme == "" || resolved.Host == "" {
+				// join propre du path
+				baseDir := filepath.Dir(scriptURL.Path)
+				if baseDir == "." {
+					baseDir = ""
+				}
+				joined := filepath.ToSlash(filepath.Join(baseDir, name))
+				if !strings.HasPrefix(joined, "/") {
+					joined = "/" + joined
+				}
+				resolved = &url.URL{
+					Scheme: scriptURL.Scheme,
+					Host:   scriptURL.Host,
+					Path:   joined,
+				}
+			}
+
+			out = append(out, resolved)
+		}
+
+	}
+
+	// dedupe
+	if len(out) > 1 {
+		seen := map[string]bool{}
+		uniq := out[:0]
+		for _, u := range out {
+			key := u.String()
+			if !seen[key] {
+				seen[key] = true
+				uniq = append(uniq, u)
+			}
+		}
+		out = uniq
+	}
+	return out
 }
 
 // ------------------------------------------------------------------

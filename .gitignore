@@ -1,2 +1,6 @@
 bin/
 extracted_sources/
+/tsmap-extract.iml
+/recovered/
+/.gopath/
+/.idea/

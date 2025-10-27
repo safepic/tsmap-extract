@@ -1,54 +1,75 @@
 # tsmap-extract — Recover JS/TS sources from sourcemaps for pentesters
 
-tsmap-extract is a lightweight, pure-Go tool to recover original JavaScript and TypeScript source files from source map (.map) files. It is designed for security professionals and pentesters who need to extract readable code from minified or bundled assets during assessments, incident response, or forensic analysis. Features include safe path resolution (prevents path traversal), support for ../ segments, optional basic beautification, and EOL normalization.
+tsmap-extract is a combined CLI for recovering original JavaScript and TypeScript source files from source maps.  
+It bundles two complementary modes:
 
-It is written in pure Go, with no external dependencies, and includes safe path handling to prevent path traversal and ensure correct reconstruction of directory structures.
+* `extract` - reconstruct sources from a local `.map` file.
+* `crawl`   - crawl a web page, find JavaScript bundles, try associated `.map` files and recover sources.
+
+The tool is written in pure Go and focuses on safe path handling (prevents path traversal), pentest-friendly features (proxy, insecure TLS for intercepting proxies), and no external runtime dependencies for the extraction logic.
 
 ------------------------------------------------------------
 
 ## Features
 
-* Reads standard JS/TS sourcemap files (.js.map, .ts.map, etc.)
-* Recreates the original source files in a specified output directory
-* Prevents directory traversal (files cannot escape the output directory)
-* Supports relative paths with .. segments correctly and safely
-* Ignores empty source entries when determining directory depth
-* Optional basic beautification for JS/TS files (--beautify)
-* Optional end-of-line normalization (--eol unix or --eol dos)
-* Pure Go standard library (no external packages)
-* Works on Linux, macOS, Windows
+
+* `extract` subcommand: extract sources from a local `.map` file
+* `crawl` subcommand: fetch a web page, discover `<script src>` entries, download `.js` and try associated `.map` files (inline base64 or external)
+* Safe path anchoring with support for `..` segments while preventing files leaving the output directory
+* Ignore empty `sourcesContent` when computing anchor depth
+* Optional basic beautification for JS/TS (`--beautify`)
+* Optional EOL normalization (`--eol unix|dos`)
+* Proxy support (`--proxy`) and TLS verification skip (`--insecure`) for use with intercepting proxies (Burp/ZAP)
+* Options to save downloaded `.js` and `.map` files (`--save-js`, `--save-map`)
+* Concurrency control for crawling (`--concurrency`)
+* Single binary with both modes; no extra runtime libraries required for extraction logic
 
 ------------------------------------------------------------
 
 ## Installation
 
-Requires Go 1.21 or later.
+Requires Go 1.24 or later.
 
+### go build (recommended)
 ```bash
-git clone https://github.com/yourusername/tsmap-extract.git
+git clone git@github.com:safepic/tsmap-extract.git
 cd tsmap-extract
-go build -o tsmap-extract tsmap-extract.go
+go build -o tsmap-extract main.go
 ```
 
 ------------------------------------------------------------
 
 ## Usage
 
-tsmap-extract -map <file.map> [options]
+General form:
+```
+tsmap-extract <subcommand> [flags]
+```
 
-Options:
+```
+tsmap-extract - combined extractor and crawler
 
-- -map : Path to the .map file (required)
-- -out : Output directory (default: extracted_sources)
-- --beautify : Enables basic readable formatting for JS/TS files
-- --eol unix or --eol dos : Normalize line endings (LF or CRLF)
+Usage:
+tsmap-extract extract [flags]    Extract sources from a .map file
+tsmap-extract crawl   [flags]    Crawl a page, find JS and extract .map sources
 
+Run 'tsmap-extract <subcommand> -h' for subcommand help.
+```
 ------------------------------------------------------------
+### extract - Flags & example
 
-## Example
+Extract sources from a local `.map` file.
+
+Flags:
+* `-map <file>`          : Path to the .map file (required)
+* `-out <dir>`           : Output directory (default: extracted_sources)
+* `-beautify`            : Enable basic beautification of JS/TS output
+* `-eol unix|dos`        : Normalize line endings to LF (unix) or CRLF (dos)
+
+Example:
 
 ```bash
-tsmap-extract -map dist/app.js.map -out ./sources --beautify --eol unix
+tsmap-extract extract -map dist/app.js.map -out ./sources --beautify --eol unix
 ```
 
 Example output:
@@ -60,6 +81,31 @@ Skipped (no content): ../node_modules/core-js/internals/object-keys.js
 Summary: 2 written, 1 skipped
 ```
 ------------------------------------------------------------
+
+------------------------------------------------------------
+### crawl - Flags & example
+
+Crawl a page, fetch JS bundles, try to find or derive `.map` URLs and extract sources.
+
+Flags:
+* `-url <url>`           : Root page URL to crawl (required)
+* `-out <dir>`           : Output base directory (default: recovered)
+* `-beautify`            : Enable basic beautification of JS/TS output
+* `-eol unix|dos`        : Normalize line endings to LF or CRLF
+* `-concurrency <n>`     : Parallel downloads (default: 4)
+* `-user-agent <str>`    : User-Agent header (default: tsmap-crawl/1.0)
+* `--save-js`            : Save downloaded .js files beside recovered sources
+* `--save-map`           : Save downloaded .map files beside recovered sources
+* `--proxy <url>`        : Proxy (e.g. http://127.0.0.1:8080)
+* `--insecure`           : Disable TLS verification (useful with intercepting proxies)
+
+
+```bash
+tsmap-extract crawl -url https://example.com/ -out ./sources --beautify --eol unix 
+```
+
+
+
 
 ## How path handling works
 
@@ -86,14 +132,21 @@ extracted_sources/src/foo.js
 
 ## Security
 
-- Output files always remain inside the output directory
-- Safe resolution of all relative paths
-- Sanitization of file names
-- No network access
-- No execution of extracted content
-- Empty or missing sources are ignored
+- Files cannot escape the target output directory (anti-traversal).
+- Leading `..` in sourcemap paths are handled by an internal anchor, but resulting files remain inside `-out`.
+- Empty `sourcesContent` entries are ignored when computing anchor depth (avoids deep unused anchors).
+- No network access is performed by `extract` (local only).
+- `crawl` performs network requests; respect target site rules and legal constraints when pentesting.
 
 ------------------------------------------------------------
+
+## Recommendations for pentesters
+
+- Use `--proxy` + `--insecure` with Burp or ZAP to inspect HTTP/HTTPS traffic.
+- If possible, import the Burp CA to avoid using `--insecure`.
+- Use `--save-js` and `--save-map` to keep original artifacts for later analysis.
+- Use `--concurrency` to tune speed vs. politeness depending on the target.
+
 
 ## Cross compilation (optional)
 

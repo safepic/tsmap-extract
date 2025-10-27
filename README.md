@@ -24,9 +24,11 @@ It is written in pure Go, with no external dependencies, and includes safe path 
 
 Requires Go 1.21 or later.
 
+```bash
 git clone https://github.com/yourusername/tsmap-extract.git
 cd tsmap-extract
 go build -o tsmap-extract tsmap-extract.go
+```
 
 ------------------------------------------------------------
 
@@ -45,16 +47,18 @@ Options:
 
 ## Example
 
+```bash
 tsmap-extract -map dist/app.js.map -out ./sources --beautify --eol unix
+```
 
 Example output:
-
+```bash
 Written: sources/src/app.ts
 Written: sources/src/utils/math.ts
 Skipped (no content): ../node_modules/core-js/internals/object-keys.js
 
 Summary: 2 written, 1 skipped
-
+```
 ------------------------------------------------------------
 
 ## How path handling works
